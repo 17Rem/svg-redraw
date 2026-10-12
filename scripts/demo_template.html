@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ · 绘制流程 Demo</title>
+<style>
+  :root{
+    --ink:#f1ecfa; --ink-dim:#a69fbe; --paper:#fbf9fd;
+    --accent:#b3a4e6; --accent2:#8f7fd8;
+    --bg0:#131022; --bg1:#1c1830; --bg2:#272141;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden}
+  body{background:radial-gradient(120% 90% at 50% -20%,#2d2649 0%,var(--bg1) 45%,var(--bg0) 100%);
+       color:var(--ink);display:flex;flex-direction:column;
+       font-family:"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  header{display:flex;align-items:baseline;gap:18px;padding:15px 26px 11px;
+         border-bottom:1px solid rgba(255,255,255,.07);flex:none}
+  header h1{margin:0;font-size:18px;letter-spacing:6px;font-weight:600}
+  header .sub{font-size:12.5px;color:var(--ink-dim);letter-spacing:2px}
+  header .right{margin-left:auto;font-size:12.5px;color:var(--ink-dim);
+                letter-spacing:1px;font-variant-numeric:tabular-nums}
+  main{flex:1;display:flex;min-height:0}
+  .canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;
+               gap:20px;padding:22px;min-width:0}
+  .paper{position:relative;height:100%;max-height:100%;aspect-ratio:960/1720;max-width:100%;
+         background:var(--paper);border-radius:10px;overflow:hidden;
+         box-shadow:0 34px 90px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.07) inset}
+  .paper svg,.paper img,.refbox img{display:block;width:100%;height:100%;object-fit:contain}
+  .paper::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:10px;
+                box-shadow:0 0 90px rgba(120,100,190,.16) inset}
+  .refbox{display:none;position:relative;height:100%;aspect-ratio:960/1720;max-width:100%;
+          border-radius:10px;overflow:hidden;background:var(--paper);
+          box-shadow:0 34px 90px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.07) inset}
+  body.compare .refbox{display:block}
+  .refbox .tag{position:absolute;left:12px;top:12px;font-size:11.5px;letter-spacing:3px;
+               color:#fff;background:rgba(24,20,40,.72);padding:4px 11px;border-radius:999px}
+  .refbox .tag2{position:absolute;right:12px;top:12px;font-size:11.5px;letter-spacing:3px;
+                color:#fff;background:rgba(24,20,40,.72);padding:4px 11px;border-radius:999px;
+                display:none}
+  #refpanel .missing{position:absolute;inset:0;display:none;place-items:center;text-align:center;
+                     font-size:12px;line-height:2;color:#8a82a8;padding:24px}
+  aside{width:296px;flex:none;border-left:1px solid rgba(255,255,255,.07);
+        padding:18px 20px;overflow:auto}
+  aside h2{margin:0 0 14px;font-size:11.5px;letter-spacing:3px;color:var(--ink-dim);font-weight:500}
+  aside .hint{margin-top:18px;font-size:11.5px;line-height:1.75;color:#6f6790;letter-spacing:.4px}
+  .stage{margin-bottom:11px}
+  .stage .row{display:flex;align-items:center;gap:9px;font-size:13px;margin-bottom:6px}
+  .stage .dot{width:9px;height:9px;border-radius:50%;background:#3a3358;flex:none;
+              transition:background .25s,box-shadow .25s}
+  .stage.on .dot{background:var(--accent);box-shadow:0 0 12px var(--accent)}
+  .stage .name{color:var(--ink-dim);transition:color .25s;letter-spacing:.5px}
+  .stage.on .name{color:#fff}
+  .stage .pct{margin-left:auto;color:#6f6790;font-size:11.5px;
+              font-variant-numeric:tabular-nums}
+  .bar{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+  .bar > i{display:block;height:100%;width:0;border-radius:99px;
+           background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  footer{border-top:1px solid rgba(255,255,255,.07);padding:12px 26px 15px;
+         display:flex;align-items:center;gap:16px;flex:none}
+  button{font-family:inherit;color:var(--ink);background:rgba(255,255,255,.07);
+         border:1px solid rgba(255,255,255,.12);border-radius:10px;cursor:pointer;
+         transition:background .18s,transform .12s}
+  button:hover{background:rgba(255,255,255,.15)}
+  button:active{transform:translateY(1px)}
+  #play{width:46px;height:46px;font-size:15px;display:grid;place-items:center;flex:none}
+  #replay{height:46px;padding:0 16px;font-size:13px;letter-spacing:2px;flex:none}
+  #compare{height:46px;padding:0 16px;font-size:13px;letter-spacing:2px;flex:none}
+  #compare.on{background:rgba(179,164,230,.3);border-color:rgba(179,164,230,.55);color:#fff}
+  .scrub{flex:1;display:flex;align-items:center;gap:13px;min-width:0}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:99px;
+    background:linear-gradient(90deg,var(--accent) var(--p,0%),rgba(255,255,255,.12) var(--p,0%))}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;
+    margin-top:-4.5px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(179,164,230,.35)}
+  input[type=range]::-moz-range-track{height:6px;border-radius:99px;background:rgba(255,255,255,.12)}
+  input[type=range]::-moz-range-progress{height:6px;border-radius:99px;background:var(--accent)}
+  input[type=range]::-moz-range-thumb{width:15px;height:15px;border:0;border-radius:50%;background:#fff}
+  .clock{font-size:12.5px;color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .speed{display:flex;gap:5px;flex:none}
+  .speed button{padding:6px 9px;font-size:11.5px;border-radius:8px;color:var(--ink-dim)}
+  .speed button.on{background:rgba(179,164,230,.28);color:#fff;border-color:rgba(179,164,230,.5)}
+  @media (max-width:920px){aside{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1>
+  <span class="sub">__SUB__</span>
+  <span class="right" id="stat">—</span>
+</header>
+<main>
+  <div class="canvas-wrap">
+    <div class="refbox" id="refpanel">
+      <img id="refimg" alt="参考原图" src="__REF__">
+      <span class="tag">参考原图</span>
+      <span class="tag2">REFERENCE</span>
+      <div class="missing" id="refmissing">未找到同目录下的参考图<br>__REF__</div>
+    </div>
+    <div class="paper" id="paper">
+__SVG__
+  </div></div>
+  <aside>
+    <h2>绘 制 阶 段</h2>
+    <div id="stages"></div>
+    <div class="hint">拖动时间轴可逐帧回看任意一步；<br>空格键播放 / 暂停。</div>
+  </aside>
+</main>
+<footer>
+  <button id="play" title="播放 / 暂停">▶</button>
+  <button id="replay">重播</button>
+  <button id="compare">对比原图</button>
+  <div class="scrub">
+    <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="时间轴">
+    <span class="clock" id="clock">0.0s / __DUR__s</span>
+  </div>
+  <div class="speed" id="speed">
+    <button data-v="0.5">0.5×</button>
+    <button data-v="1" class="on">1×</button>
+    <button data-v="2">2×</button>
+    <button data-v="4">4×</button>
+  </div>
+</footer>
+<script>
+(function(){
+  "use strict";
+  var DUR = __DUR__;
+  var STAGES = __STAGES__;
+  var svg = document.getElementById('redraw-art');
+  var els = Array.prototype.slice.call(svg.querySelectorAll('[data-t]'));
+  var nodes = els.map(function(e){
+    return {e:e, t:parseFloat(e.getAttribute('data-t')),
+            d:parseFloat(e.getAttribute('data-d')), o:-1};
+  });
+  var layerCount = svg.querySelectorAll('g[data-layer]').length;
+  document.getElementById('stat').textContent =
+    nodes.length.toLocaleString() + ' 个矢量图形 · ' + layerCount + ' 个图层 · 0 张位图';
+
+  var panel = document.getElementById('stages');
+  STAGES.forEach(function(s){
+    var d = document.createElement('div');
+    d.className = 'stage';
+    d.innerHTML = '<div class="row"><i class="dot"></i><span class="name"></span>' +
+                  '<span class="pct">0%</span></div><div class="bar"><i></i></div>';
+    d.querySelector('.name').textContent = s.label;
+    panel.appendChild(d);
+  });
+  var chips = STAGES.map(function(s, i){
+    var el = panel.children[i];
+    return {s:s, el:el, bar:el.querySelector('.bar > i'), pct:el.querySelector('.pct')};
+  });
+
+  var time = 0, playing = false, speed = 1, last = 0;
+  var playBtn = document.getElementById('play');
+  var scrub = document.getElementById('scrub');
+  var clock = document.getElementById('clock');
+  function smooth(x){ return x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x); }
+
+  function apply(t3){
+    for (var i = 0; i < nodes.length; i++){
+      var n = nodes[i];
+      var v = smooth((t3 - n.t) / n.d);
+      if (v !== n.o){ n.o = v; n.e.style.opacity = v; }
+    }
+    for (var j = 0; j < chips.length; j++){
+      var c = chips[j], s = c.s;
+      var p = Math.max(0, Math.min(1, (t3 - s.from) / (s.to - s.from)));
+      c.bar.style.width = (p * 100) + '%';
+      c.pct.textContent = Math.round(p * 100) + '%';
+      if (p > 0 !== c.on){ c.on = p > 0; c.el.classList.toggle('on', p > 0); }
+    }
+    var pc = (t3 / DUR) * 100;
+    scrub.value = Math.round(pc * 10);
+    scrub.style.setProperty('--p', pc + '%');
+    clock.textContent = t3.toFixed(1) + 's / ' + DUR.toFixed(1) + 's';
+  }
+
+  function frame(ts){
+    if (playing){
+      if (!last) last = ts;
+      var dt = Math.min(0.25, (ts - last) / 1000);
+      last = ts;
+      time += dt * speed;
+      if (time >= DUR){ time = DUR; playing = false; playBtn.textContent = '▶'; }
+      apply(time);
+    } else { last = 0; }
+    requestAnimationFrame(frame);
+  }
+
+  playBtn.addEventListener('click', function(){
+    if (time >= DUR) time = 0;
+    playing = !playing; last = 0;
+    playBtn.textContent = playing ? '❚❚' : '▶';
+  });
+  document.getElementById('replay').addEventListener('click', function(){
+    time = 0; apply(0); playing = true; last = 0; playBtn.textContent = '❚❚';
+  });
+  scrub.addEventListener('input', function(){
+    time = scrub.value / 1000 * DUR; playing = false;
+    playBtn.textContent = '▶'; apply(time);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('#speed button'), function(b){
+    b.addEventListener('click', function(){
+      speed = parseFloat(b.getAttribute('data-v'));
+      Array.prototype.forEach.call(b.parentNode.children, function(x){ x.classList.remove('on'); });
+      b.classList.add('on');
+    });
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.code === 'Space'){ e.preventDefault(); playBtn.click(); }
+  });
+
+  // 参考原图对比：按需加载同目录下的对比图，SVG 本身依旧是纯矢量
+  var cmpBtn = document.getElementById('compare');
+  var refImg = document.getElementById('refimg');
+  var refMissing = document.getElementById('refmissing');
+  if (!refImg.getAttribute('src')){ cmpBtn.style.display = 'none'; }
+  refImg.addEventListener('error', function(){
+    refImg.style.display = 'none';
+    refMissing.style.display = 'grid';
+  });
+  cmpBtn.addEventListener('click', function(){
+    var on = document.body.classList.toggle('compare');
+    cmpBtn.classList.toggle('on', on);
+    cmpBtn.textContent = on ? '关闭对比' : '对比原图';
+  });
+  if (/(?:^|[#&])ref(?:=1)?(?:&|$)/.test(location.hash)){ cmpBtn.click(); }
+
+  apply(0);
+  // #t=秒 直接定位到某个时刻（便于截图与分享某个绘制阶段）
+  var m = /(?:^|[#&])t=([0-9.]+)/.exec(location.hash);
+  if (m){
+    time = Math.max(0, Math.min(DUR, parseFloat(m[1])));
+    apply(time);
+    playing = false; playBtn.textContent = '▶';
+  } else {
+    playing = true; playBtn.textContent = '❚❚';
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

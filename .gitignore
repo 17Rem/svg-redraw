@@ -1,0 +1,29 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build output of the pipeline
+build/
+out/
+*.svg.tmp
+
+# Rendered deliverables
+*.mp4
+*.webm
+
+# Reference images and traced output are intentionally NOT part of this repository:
+# the tool operates on images the user supplies and must be free to use.
+*.jpg
+*.jpeg
+*.png
+*.webp
+!docs/**/*.png
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
