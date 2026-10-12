@@ -132,6 +132,10 @@ whose licence permits derivatives.
 
 MIT — see [LICENSE](LICENSE).
 
+The licence covers the software in this repository. It does **not** grant any rights to the
+images you process with it, nor to the SVG, HTML or video you generate from them — those
+remain subject to the rights of the original image.
+
 ## 中文速览
 
 把参考图重绘成**原生 SVG**：分层（构图 → 背景 → 固有色 → 阴影 → 暗部 → 高光 → 细线 →
