@@ -1,245 +1,98 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__TITLE__ · 绘制流程 Demo</title>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>@@TITLE@@ — SVG Studio</title>
 <style>
-  :root{
-    --ink:#f1ecfa; --ink-dim:#a69fbe; --paper:#fbf9fd;
-    --accent:#b3a4e6; --accent2:#8f7fd8;
-    --bg0:#131022; --bg1:#1c1830; --bg2:#272141;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%;overflow:hidden}
-  body{background:radial-gradient(120% 90% at 50% -20%,#2d2649 0%,var(--bg1) 45%,var(--bg0) 100%);
-       color:var(--ink);display:flex;flex-direction:column;
-       font-family:"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif;
-       -webkit-font-smoothing:antialiased}
-  header{display:flex;align-items:baseline;gap:18px;padding:15px 26px 11px;
-         border-bottom:1px solid rgba(255,255,255,.07);flex:none}
-  header h1{margin:0;font-size:18px;letter-spacing:6px;font-weight:600}
-  header .sub{font-size:12.5px;color:var(--ink-dim);letter-spacing:2px}
-  header .right{margin-left:auto;font-size:12.5px;color:var(--ink-dim);
-                letter-spacing:1px;font-variant-numeric:tabular-nums}
-  main{flex:1;display:flex;min-height:0}
-  .canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;
-               gap:20px;padding:22px;min-width:0}
-  .paper{position:relative;height:100%;max-height:100%;aspect-ratio:960/1720;max-width:100%;
-         background:var(--paper);border-radius:10px;overflow:hidden;
-         box-shadow:0 34px 90px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.07) inset}
-  .paper svg,.paper img,.refbox img{display:block;width:100%;height:100%;object-fit:contain}
-  .paper::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:10px;
-                box-shadow:0 0 90px rgba(120,100,190,.16) inset}
-  .refbox{display:none;position:relative;height:100%;aspect-ratio:960/1720;max-width:100%;
-          border-radius:10px;overflow:hidden;background:var(--paper);
-          box-shadow:0 34px 90px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.07) inset}
-  body.compare .refbox{display:block}
-  .refbox .tag{position:absolute;left:12px;top:12px;font-size:11.5px;letter-spacing:3px;
-               color:#fff;background:rgba(24,20,40,.72);padding:4px 11px;border-radius:999px}
-  .refbox .tag2{position:absolute;right:12px;top:12px;font-size:11.5px;letter-spacing:3px;
-                color:#fff;background:rgba(24,20,40,.72);padding:4px 11px;border-radius:999px;
-                display:none}
-  #refpanel .missing{position:absolute;inset:0;display:none;place-items:center;text-align:center;
-                     font-size:12px;line-height:2;color:#8a82a8;padding:24px}
-  aside{width:296px;flex:none;border-left:1px solid rgba(255,255,255,.07);
-        padding:18px 20px;overflow:auto}
-  aside h2{margin:0 0 14px;font-size:11.5px;letter-spacing:3px;color:var(--ink-dim);font-weight:500}
-  aside .hint{margin-top:18px;font-size:11.5px;line-height:1.75;color:#6f6790;letter-spacing:.4px}
-  .stage{margin-bottom:11px}
-  .stage .row{display:flex;align-items:center;gap:9px;font-size:13px;margin-bottom:6px}
-  .stage .dot{width:9px;height:9px;border-radius:50%;background:#3a3358;flex:none;
-              transition:background .25s,box-shadow .25s}
-  .stage.on .dot{background:var(--accent);box-shadow:0 0 12px var(--accent)}
-  .stage .name{color:var(--ink-dim);transition:color .25s;letter-spacing:.5px}
-  .stage.on .name{color:#fff}
-  .stage .pct{margin-left:auto;color:#6f6790;font-size:11.5px;
-              font-variant-numeric:tabular-nums}
-  .bar{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
-  .bar > i{display:block;height:100%;width:0;border-radius:99px;
-           background:linear-gradient(90deg,var(--accent2),var(--accent))}
-  footer{border-top:1px solid rgba(255,255,255,.07);padding:12px 26px 15px;
-         display:flex;align-items:center;gap:16px;flex:none}
-  button{font-family:inherit;color:var(--ink);background:rgba(255,255,255,.07);
-         border:1px solid rgba(255,255,255,.12);border-radius:10px;cursor:pointer;
-         transition:background .18s,transform .12s}
-  button:hover{background:rgba(255,255,255,.15)}
-  button:active{transform:translateY(1px)}
-  #play{width:46px;height:46px;font-size:15px;display:grid;place-items:center;flex:none}
-  #replay{height:46px;padding:0 16px;font-size:13px;letter-spacing:2px;flex:none}
-  #compare{height:46px;padding:0 16px;font-size:13px;letter-spacing:2px;flex:none}
-  #compare.on{background:rgba(179,164,230,.3);border-color:rgba(179,164,230,.55);color:#fff}
-  .scrub{flex:1;display:flex;align-items:center;gap:13px;min-width:0}
-  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent}
-  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:99px;
-    background:linear-gradient(90deg,var(--accent) var(--p,0%),rgba(255,255,255,.12) var(--p,0%))}
-  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;
-    margin-top:-4.5px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(179,164,230,.35)}
-  input[type=range]::-moz-range-track{height:6px;border-radius:99px;background:rgba(255,255,255,.12)}
-  input[type=range]::-moz-range-progress{height:6px;border-radius:99px;background:var(--accent)}
-  input[type=range]::-moz-range-thumb{width:15px;height:15px;border:0;border-radius:50%;background:#fff}
-  .clock{font-size:12.5px;color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
-  .speed{display:flex;gap:5px;flex:none}
-  .speed button{padding:6px 9px;font-size:11.5px;border-radius:8px;color:var(--ink-dim)}
-  .speed button.on{background:rgba(179,164,230,.28);color:#fff;border-color:rgba(179,164,230,.5)}
-  @media (max-width:920px){aside{display:none}}
-</style>
-</head>
+:root{color-scheme:dark;--bg:#0d1119;--panel:#141b26;--panel2:#101721;--line:#273143;--text:#d8e0ee;--muted:#7c8ba1;--blue:#79bfff;--mint:#8bdbc7;font-family:Inter,ui-sans-serif,system-ui,"Microsoft YaHei",sans-serif;font-size:12px}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);overflow:hidden}button,a,input,select{font:inherit}button{cursor:pointer;color:inherit;background:transparent;border:1px solid transparent;border-radius:6px;padding:7px 9px}button:hover{background:#253146}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}button[aria-pressed=true]{color:var(--blue);background:#24364c}.primary{background:#80c6ff;color:#10263b;font-weight:650}.primary:hover{background:#a7d9ff}button:disabled{opacity:.35;cursor:default}a{color:inherit;text-decoration:none}select{background:#1a2433;border:1px solid var(--line);border-radius:5px;color:var(--text);padding:5px}.topbar{height:53px;display:flex;align-items:center;gap:16px;padding:0 19px;border-bottom:1px solid var(--line);background:#111722}.brand{display:flex;align-items:center;gap:10px;letter-spacing:1.6px;font-weight:750}.brand-mark{width:25px;height:25px;border:1px solid #89c8ff;border-radius:6px;display:grid;place-items:center;color:var(--blue);font-size:17px}.divider{height:20px;width:1px;background:var(--line)}.document-title{color:#a1aec1;font-size:12px}.tag{font-size:10px;letter-spacing:.8px;border:1px solid #2a4259;color:#8eb6d7;padding:3px 6px;border-radius:4px}.top-actions{margin-left:auto;display:flex;align-items:center;gap:9px}.download{border:1px solid #3c5069;border-radius:6px;padding:7px 11px;background:#1b2a3c}.status-dot{width:6px;height:6px;border-radius:50%;background:#8bdac7;display:inline-block;margin-right:7px}.workspace{height:calc(100vh - 53px);display:grid;grid-template-columns:216px minmax(360px,1fr) 332px;grid-template-rows:minmax(290px,1fr) 232px 28px;grid-template-areas:'layers stage inspect' 'layers code inspect' 'status status status'}.panel-title{font-size:10px;letter-spacing:1.6px;text-transform:uppercase;color:#8697ae;display:flex;align-items:center;justify-content:space-between;margin-bottom:15px}.layers{grid-area:layers;border-right:1px solid var(--line);background:var(--panel2);padding:18px 10px 10px;display:flex;flex-direction:column;min-height:0}.layers .panel-title{padding:0 7px}.layer-root{font-size:12px;padding:10px 8px;color:#afbed1;display:flex;align-items:center;gap:8px;border-bottom:1px solid #202b3c;margin-bottom:9px}.layer-list{overflow-y:auto;flex:1}.layer{display:grid;grid-template-columns:25px minmax(0,1fr) 27px;align-items:center;margin:3px 0;border:1px solid transparent;border-radius:6px;min-height:47px;position:relative}.layer.active{background:#203047;border-color:#314d6b}.layer.active:before{content:'';width:2px;height:21px;background:#8ecbff;position:absolute;left:-1px;border-radius:2px}.layer-icon{text-align:center;color:#7b93b2;font-size:16px}.layer-select{text-align:left;padding:6px 3px;min-width:0}.layer-select b{display:block;font-weight:500;font-size:12px}.layer-select small{font-size:10px;color:#70849e;margin-top:3px;display:block}.eye{font-size:12px;color:#829bb9;padding:6px}.layer.hidden .layer-select{opacity:.4}.layer-bottom{border-top:1px solid var(--line);padding:15px 7px 5px;line-height:1.8;color:#75869c;font-size:10px}.layer-bottom strong{display:block;color:#bdd0e5;font-size:12px;font-weight:450}.stage-panel{grid-area:stage;min-width:0;min-height:0;display:flex;flex-direction:column;background:#0c121d}.canvas-toolbar{height:42px;flex:0 0 42px;border-bottom:1px solid var(--line);padding:0 13px;display:flex;align-items:center;gap:7px;color:#8a9bb1}.canvas-toolbar .spacer{flex:1}.tool{border:1px solid #2b374b;padding:4px 8px;font-size:11px}.zoom-readout{min-width:44px;text-align:center;color:#b8c8dc;font-size:11px}.viewport{position:relative;flex:1;min-height:0;overflow:hidden;display:grid;place-items:center;background-color:#101721;background-image:radial-gradient(#2b3443 .65px,transparent .65px);background-size:14px 14px;padding:23px}.art-frame{width:100%;max-height:100%;aspect-ratio:@@WIDTH@@/@@HEIGHT@@;position:relative;display:grid;place-items:center;filter:drop-shadow(0 14px 24px #0005)}#drawing{display:block;width:100%;height:100%;overflow:hidden;background:#f5f7fc}.art-caption{position:absolute;top:9px;left:12px;font-size:10px;letter-spacing:.6px;color:#758ba5;pointer-events:none}.viewport-hint{position:absolute;bottom:9px;right:13px;font-size:10px;color:#677c98}.playback{border-top:1px solid var(--line);flex:0 0 81px;background:#151d2a;padding:9px 13px}.playback-row{display:flex;align-items:center;gap:8px;height:28px}.time{font:11px ui-monospace,Consolas,monospace;color:#a2b5ce;white-space:nowrap}.stage-name{font-size:11px;color:#a7bad3;margin-left:auto}.progress-wrap{display:flex;align-items:center;gap:9px;margin-top:8px}.progress-wrap input{width:100%;height:4px;accent-color:var(--blue);cursor:pointer}.progress-label{font:10px ui-monospace,monospace;color:#809ab7;width:38px}.inspector{grid-area:inspect;background:var(--panel2);border-left:1px solid var(--line);padding:18px 15px;overflow:auto;min-height:0}.inspector-section{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:18px}.inspector-section:last-child{border:0;margin:0;padding-bottom:0}.part-heading{display:flex;justify-content:space-between;align-items:center;font-size:15px;color:#e0eaf6;margin-bottom:6px}.part-heading strong{font-weight:500}.part-description{font-size:10px;color:#8194ad;line-height:1.6}.follow{display:flex;align-items:center;gap:6px;font-size:11px;color:#9fbbda;cursor:pointer;user-select:none;margin-bottom:11px}.follow input{accent-color:#91cdff}.compare-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}.compare-box{min-width:0}.compare-label{display:flex;align-items:center;justify-content:space-between;color:#8fa3bd;font-size:10px;margin-bottom:6px}.compare-image{position:relative;width:100%;height:150px;border-radius:6px;overflow:hidden;background:#eaf0f8;border:1px solid #38465a}.compare-image img{position:absolute;max-width:none;transform:none}.compare-image svg{width:100%;height:100%;display:block}.compare-empty{position:absolute;inset:0;display:grid;place-items:center;color:#485a70;background:#e8eef5;font-size:11px;padding:12px;text-align:center}.compare-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:8px;color:#6f849f;font-size:10px}.expand-compare{padding:2px 6px;color:#8ebdea;font-size:10px}.current-color{display:flex;align-items:center;gap:11px;padding:12px;border:1px solid #2c3c50;background:#172231;border-radius:7px}.color-large{height:36px;width:36px;border-radius:6px;border:1px solid #ffffff2b;flex:0 0 36px}.color-values{line-height:1.7;font:11px ui-monospace,Consolas,monospace}.color-values small{font-size:10px;color:#8499b1}.swatches{display:grid;grid-template-columns:repeat(7,1fr);gap:7px;margin-top:11px}.swatch{height:24px;min-width:0;padding:0;border:1px solid #ffffff25;border-radius:4px}.swatch.selected{outline:2px solid #a0d5ff;outline-offset:2px}.palette-note{font-size:10px;color:#788da7;line-height:1.6;margin-top:10px}.property-grid{display:grid;grid-template-columns:72px 1fr;gap:10px;font-size:11px}.property-grid dt{color:#7c91ad}.property-grid dd{margin:0;color:#bfd1e7;text-align:right;font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}.code-panel{grid-area:code;min-width:0;min-height:0;border-top:1px solid var(--line);display:flex;flex-direction:column;background:#0c121c}.code-toolbar{height:37px;flex:0 0 37px;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid #222e40}.code-tab{font:11px ui-monospace,Consolas,monospace;color:#a9c9e8}.code-tab:before{content:'‹/›';color:#6cacdd;margin-right:7px}.code-path{font:10px ui-monospace,Consolas,monospace;color:#6c84a0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.code-toolbar .spacer{flex:1}.code-copy{padding:4px 8px;color:#94b7db;font-size:10px}.code-scroll{overflow:auto;flex:1;display:flex;min-height:0;padding:11px 0 13px}.line-numbers{color:#42556d;font:11px/1.8 ui-monospace,Consolas,monospace;text-align:right;padding:0 14px;user-select:none;white-space:pre}pre{margin:0;font:11px/1.8 ui-monospace,SFMono-Regular,Consolas,monospace;color:#a8bdd7;white-space:pre;tab-size:2;flex:1;padding-right:18px}.syntax-tag{color:#82b9e7}.syntax-attr{color:#bec8e7}.syntax-val{color:#9cceba}.syntax-comment{color:#627d99}.code-note{font-size:10px;padding:3px 15px;color:#6d819c;min-height:20px}.bottom-status{grid-area:status;border-top:1px solid var(--line);background:#152337;padding:0 13px;display:flex;align-items:center;gap:19px;font-size:10px;color:#9cb8d5}.bottom-status span:last-child{margin-left:auto}.live-indicator{display:inline-block;width:5px;height:5px;background:#7fcebd;border-radius:50%;margin-right:6px}#construction path{stroke-dasharray:1;stroke-dashoffset:1}.paint{display:none}.ink{opacity:0}#focus-outline{display:none}.toast{position:fixed;bottom:39px;left:50%;transform:translateX(-50%);background:#273d56;color:#dbedff;border:1px solid #567597;border-radius:7px;padding:9px 18px;z-index:20;opacity:0;pointer-events:none;transition:opacity .15s}.toast.visible{opacity:1}dialog{border:1px solid #3a4e68;background:#111b29;color:#d6e7fa;border-radius:12px;padding:18px;max-width:1100px;width:90vw}dialog::backdrop{background:#000a;backdrop-filter:blur(5px)}.dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.dialog-pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}.dialog-pair .compare-image{height:55vh}.hidden-reference-note{display:none;color:#d9b890;font-size:11px;line-height:1.6;margin-top:8px}@media(max-width:1180px){.workspace{grid-template-columns:184px minmax(320px,1fr) 292px}.inspector{padding:14px 11px}.compare-image{height:125px}.topbar{padding:0 12px}.document-title{display:none}.tag{font-size:9px}}@media(max-width:900px){body{overflow:auto}.workspace{height:auto;min-height:calc(100vh - 53px);grid-template-columns:154px minmax(0,1fr);grid-template-rows:520px 230px auto 28px;grid-template-areas:'layers stage' 'layers code' 'inspect inspect' 'status status'}.inspector{border-top:1px solid var(--line);border-left:0;display:grid;grid-template-columns:1.4fr 1fr;gap:20px}.inspector-section{margin:0}.inspector-section:first-child{grid-column:1/-1}.property-section{grid-column:1/-1}.compare-image{height:210px}.layer-bottom{display:none}.top-actions .tag{display:none}.stage-name{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.code-path{display:none}.bottom-status{gap:12px}.bottom-status .status-detail{display:none}}@media(max-width:580px){.workspace{grid-template-columns:1fr;grid-template-rows:430px 220px auto 28px;grid-template-areas:'stage' 'code' 'inspect' 'status'}.layers{display:none}.brand{font-size:11px;gap:7px}.brand-mark{width:22px;height:22px}.topbar{gap:10px}.topbar>.divider,.topbar>.tag{display:none}.download{font-size:10px;padding:6px}.inspector{display:block}.inspector-section{margin-bottom:18px}.compare-image{height:185px}.viewport{padding:12px}.canvas-toolbar{padding:0 8px;gap:5px}.canvas-toolbar .tool{font-size:10px;padding:4px 6px}.playback{padding:9px}.stage-name{font-size:10px}.dialog-pair{grid-template-columns:1fr}.dialog-pair .compare-image{height:30vh}.bottom-status{font-size:9px}.code-toolbar{padding:0 9px}}
+.solo{grid-template-columns:1fr}.artwork-only .topbar,.artwork-only .layers,.artwork-only .inspector,.artwork-only .code-panel,.artwork-only .bottom-status,.artwork-only .canvas-toolbar,.artwork-only .playback,.artwork-only .art-caption,.artwork-only .viewport-hint{display:none}.artwork-only .workspace{display:block;height:100vh}.artwork-only .stage-panel{height:100vh}.artwork-only .viewport{padding:0}.artwork-only{overflow:hidden}</style></head>
 <body>
-<header>
-  <h1>__TITLE__</h1>
-  <span class="sub">__SUB__</span>
-  <span class="right" id="stat">—</span>
-</header>
-<main>
-  <div class="canvas-wrap">
-    <div class="refbox" id="refpanel">
-      <img id="refimg" alt="参考原图" src="__REF__">
-      <span class="tag">参考原图</span>
-      <span class="tag2">REFERENCE</span>
-      <div class="missing" id="refmissing">未找到同目录下的参考图<br>__REF__</div>
-    </div>
-    <div class="paper" id="paper">
-__SVG__
-  </div></div>
-  <aside>
-    <h2>绘 制 阶 段</h2>
-    <div id="stages"></div>
-    <div class="hint">拖动时间轴可逐帧回看任意一步；<br>空格键播放 / 暂停。</div>
-  </aside>
+<header class="topbar"><div class="brand"><span class="brand-mark">⌘</span>SVG STUDIO</div><span class="divider"></span><span class="document-title">@@NAME@@.svg</span><span class="tag">原生 SVG</span><div class="top-actions"><span class="tag"><span class="status-dot"></span>本地工作台</span><a class="download" href="@@NAME@@.svg" download>↓ 导出 SVG</a></div></header>
+<main class="workspace">
+<aside class="layers"><div class="panel-title">图层 <button id="show-all" title="显示全部图层" aria-label="显示全部图层">◉</button></div><div class="layer-root">▾ <span>@@TITLE@@</span></div><div id="layer-list" class="layer-list"></div><div class="layer-bottom"><strong id="path-count"></strong>按照颜色区域与轮廓重建<br>点击部位查看颜色、局部与代码</div></aside>
+<section class="stage-panel"><div class="canvas-toolbar"><button class="tool" id="fit">适合画布</button><button class="tool" id="zoom-out" aria-label="缩小">−</button><span class="zoom-readout" id="zoom-readout">100%</span><button class="tool" id="zoom-in" aria-label="放大">＋</button><span class="spacer"></span><button class="tool" id="focus-part">聚焦部位</button><button class="tool" id="finish">完整成图</button></div><div class="viewport" id="viewport"><span class="art-caption">@@WIDTH@@ × @@HEIGHT@@</span><div class="art-frame" id="art-frame">@@ART@@</div><span class="viewport-hint">点击图层或画面，检查对应 SVG 路径</span></div><div class="playback"><div class="playback-row"><button class="primary" id="play" aria-pressed="false">▶ 播放绘制</button><button id="replay" title="从头重播" aria-label="从头重播">↺</button><select id="speed" aria-label="播放速度"><option value=".5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select><span class="time" id="time-label">—</span><span class="stage-name" id="stage-name">完成</span></div><div class="progress-wrap"><input id="timeline" type="range" min="0" max="1" step=".05" value="1" aria-label="绘制进度"><span class="progress-label" id="progress-label">100%</span></div></div></section>
+<aside class="inspector"><section class="inspector-section"><div class="panel-title">正在查看 <span><i class="live-indicator"></i>LIVE</span></div><div class="part-heading"><strong id="part-name">当前部位</strong><span class="tag" id="part-index">—</span></div><div class="part-description" id="part-description">选中部位的颜色、局部画面与原生路径</div></section><section class="inspector-section"><div class="panel-title">@@COMPARE_TITLE@@</div><label class="follow"><input type="checkbox" id="follow" checked>跟随正在绘制的部位</label><div class="compare-pair @@COMPARE_CLASS@@">@@REF_INLINE@@<div class="compare-box"><div class="compare-label">重绘<span>SVG</span></div><div class="compare-image"><svg class="detail-svg" viewBox="0 0 @@WIDTH@@ @@HEIGHT@@"><use href="#artwork"/><use href="#construction"/><use href="#linework"/></svg></div></div></div><div class="compare-bottom"><span id="crop-label">—</span><button class="expand-compare" id="expand-compare">放大对比 ↗</button></div><div id="reference-missing" class="hidden-reference-note">请将随附的参考图与此网页放在同一文件夹，供对比栏读取。</div></section><section class="inspector-section"><div class="panel-title">当前用色<span id="palette-count"></span></div><div class="current-color"><div class="color-large" id="color-large"></div><div class="color-values"><div id="color-hex">#49A0F5</div><small id="color-rgb">RGB 73, 160, 245</small></div></div><div class="swatches" id="swatches"></div><div class="palette-note">色板来自当前部位的 SVG 填色。点击颜色查看对应路径。</div></section><section class="inspector-section property-section"><div class="panel-title">路径属性</div><dl class="property-grid"><dt>元素</dt><dd id="property-element">path</dd><dt>编号</dt><dd id="property-id">—</dd><dt>所在部位</dt><dd id="property-part">—</dd><dt>绘制阶段</dt><dd id="property-phase">—</dd></dl></section></aside>
+<section class="code-panel"><div class="code-toolbar"><span class="code-tab">SVG</span><span class="code-path" id="code-path">artwork / face</span><span class="spacer"></span><span class="tag">当前路径 · 只读</span><button id="copy-code" class="code-copy">复制代码</button></div><div class="code-scroll"><div class="line-numbers" id="line-numbers">1</div><pre id="code" tabindex="0" aria-label="当前 SVG 路径代码"></pre></div><div class="code-note" id="code-note"></div></section>
+<footer class="bottom-status"><span><i class="live-indicator"></i>SVG 渲染就绪</span><span id="status-part">当前部位</span><span class="status-detail">@@WIDTH@@ × @@HEIGHT@@</span><span id="status-paths"></span><span>@@REFERENCE_NOTE@@</span></footer>
 </main>
-<footer>
-  <button id="play" title="播放 / 暂停">▶</button>
-  <button id="replay">重播</button>
-  <button id="compare">对比原图</button>
-  <div class="scrub">
-    <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="时间轴">
-    <span class="clock" id="clock">0.0s / __DUR__s</span>
-  </div>
-  <div class="speed" id="speed">
-    <button data-v="0.5">0.5×</button>
-    <button data-v="1" class="on">1×</button>
-    <button data-v="2">2×</button>
-    <button data-v="4">4×</button>
-  </div>
-</footer>
+<div id="toast" class="toast" role="status"></div>
+<dialog id="comparison-dialog"><div class="dialog-head"><strong id="dialog-title">局部对比</strong><button id="close-dialog" aria-label="关闭对比">✕</button></div><div class="dialog-pair @@COMPARE_CLASS@@">@@REF_MODAL@@<div><div class="compare-label">当前 SVG 重绘</div><div class="compare-image"><svg class="detail-svg" viewBox="0 0 @@WIDTH@@ @@HEIGHT@@"><use href="#artwork"/><use href="#construction"/><use href="#linework"/></svg></div></div></div></dialog>
+<script id="art-data" type="application/json">@@DATA@@</script>
 <script>
-(function(){
-  "use strict";
-  var DUR = __DUR__;
-  var STAGES = __STAGES__;
-  var svg = document.getElementById('redraw-art');
-  var els = Array.prototype.slice.call(svg.querySelectorAll('[data-t]'));
-  var nodes = els.map(function(e){
-    return {e:e, t:parseFloat(e.getAttribute('data-t')),
-            d:parseFloat(e.getAttribute('data-d')), o:-1};
-  });
-  var layerCount = svg.querySelectorAll('g[data-layer]').length;
-  document.getElementById('stat').textContent =
-    nodes.length.toLocaleString() + ' 个矢量图形 · ' + layerCount + ' 个图层 · 0 张位图';
-
-  var panel = document.getElementById('stages');
-  STAGES.forEach(function(s){
-    var d = document.createElement('div');
-    d.className = 'stage';
-    d.innerHTML = '<div class="row"><i class="dot"></i><span class="name"></span>' +
-                  '<span class="pct">0%</span></div><div class="bar"><i></i></div>';
-    d.querySelector('.name').textContent = s.label;
-    panel.appendChild(d);
-  });
-  var chips = STAGES.map(function(s, i){
-    var el = panel.children[i];
-    return {s:s, el:el, bar:el.querySelector('.bar > i'), pct:el.querySelector('.pct')};
-  });
-
-  var time = 0, playing = false, speed = 1, last = 0;
-  var playBtn = document.getElementById('play');
-  var scrub = document.getElementById('scrub');
-  var clock = document.getElementById('clock');
-  function smooth(x){ return x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x); }
-
-  function apply(t3){
-    for (var i = 0; i < nodes.length; i++){
-      var n = nodes[i];
-      var v = smooth((t3 - n.t) / n.d);
-      if (v !== n.o){ n.o = v; n.e.style.opacity = v; }
-    }
-    for (var j = 0; j < chips.length; j++){
-      var c = chips[j], s = c.s;
-      var p = Math.max(0, Math.min(1, (t3 - s.from) / (s.to - s.from)));
-      c.bar.style.width = (p * 100) + '%';
-      c.pct.textContent = Math.round(p * 100) + '%';
-      if (p > 0 !== c.on){ c.on = p > 0; c.el.classList.toggle('on', p > 0); }
-    }
-    var pc = (t3 / DUR) * 100;
-    scrub.value = Math.round(pc * 10);
-    scrub.style.setProperty('--p', pc + '%');
-    clock.textContent = t3.toFixed(1) + 's / ' + DUR.toFixed(1) + 's';
-  }
-
-  function frame(ts){
-    if (playing){
-      if (!last) last = ts;
-      var dt = Math.min(0.25, (ts - last) / 1000);
-      last = ts;
-      time += dt * speed;
-      if (time >= DUR){ time = DUR; playing = false; playBtn.textContent = '▶'; }
-      apply(time);
-    } else { last = 0; }
-    requestAnimationFrame(frame);
-  }
-
-  playBtn.addEventListener('click', function(){
-    if (time >= DUR) time = 0;
-    playing = !playing; last = 0;
-    playBtn.textContent = playing ? '❚❚' : '▶';
-  });
-  document.getElementById('replay').addEventListener('click', function(){
-    time = 0; apply(0); playing = true; last = 0; playBtn.textContent = '❚❚';
-  });
-  scrub.addEventListener('input', function(){
-    time = scrub.value / 1000 * DUR; playing = false;
-    playBtn.textContent = '▶'; apply(time);
-  });
-  Array.prototype.forEach.call(document.querySelectorAll('#speed button'), function(b){
-    b.addEventListener('click', function(){
-      speed = parseFloat(b.getAttribute('data-v'));
-      Array.prototype.forEach.call(b.parentNode.children, function(x){ x.classList.remove('on'); });
-      b.classList.add('on');
-    });
-  });
-  document.addEventListener('keydown', function(e){
-    if (e.code === 'Space'){ e.preventDefault(); playBtn.click(); }
-  });
-
-  // 参考原图对比：按需加载同目录下的对比图，SVG 本身依旧是纯矢量
-  var cmpBtn = document.getElementById('compare');
-  var refImg = document.getElementById('refimg');
-  var refMissing = document.getElementById('refmissing');
-  if (!refImg.getAttribute('src')){ cmpBtn.style.display = 'none'; }
-  refImg.addEventListener('error', function(){
-    refImg.style.display = 'none';
-    refMissing.style.display = 'grid';
-  });
-  cmpBtn.addEventListener('click', function(){
-    var on = document.body.classList.toggle('compare');
-    cmpBtn.classList.toggle('on', on);
-    cmpBtn.textContent = on ? '关闭对比' : '对比原图';
-  });
-  if (/(?:^|[#&])ref(?:=1)?(?:&|$)/.test(location.hash)){ cmpBtn.click(); }
-
-  apply(0);
-  // #t=秒 直接定位到某个时刻（便于截图与分享某个绘制阶段）
-  var m = /(?:^|[#&])t=([0-9.]+)/.exec(location.hash);
-  if (m){
-    time = Math.max(0, Math.min(DUR, parseFloat(m[1])));
-    apply(time);
-    playing = false; playBtn.textContent = '▶';
-  } else {
-    playing = true; playBtn.textContent = '❚❚';
-  }
-  requestAnimationFrame(frame);
+(()=>{'use strict';
+const data=JSON.parse(document.getElementById('art-data').textContent),$=id=>document.getElementById(id),D=data.duration;
+const map=new Map(data.parts.map(p=>[p.id,p])),phaseLabels=['固有色','阴影','细节','高光'];
+function fitFrame(){const v=$('viewport'),css=getComputedStyle(v),w=v.clientWidth-parseFloat(css.paddingLeft)-parseFloat(css.paddingRight),h=v.clientHeight-parseFloat(css.paddingTop)-parseFloat(css.paddingBottom),s=Math.min(w/data.width,h/data.height);Object.assign($('art-frame').style,{width:data.width*s+'px',height:data.height*s+'px',minHeight:'0',minWidth:'0'})}
+new ResizeObserver(fitFrame).observe($('viewport'));fitFrame();
+const dynamic=document.createElement('style'),visibility=document.createElement('style');document.head.append(dynamic,visibility);
+const tasks=[];let cursor=0;const scale=D/90,sketchEnd=data.hasGuides?6*scale:0,paintStart=sketchEnd+(data.hasLinework?9*scale:0);cursor=paintStart;const available=D-paintStart-2*scale,weights=[29,15,20,9].map((n,i)=>data.parts.some(p=>data.samples[p.id+'-'+i]?.length)?n:0),totalWeight=weights.reduce((a,b)=>a+b,0)||1;const lengths=weights.map(n=>n/totalWeight*available);
+for(let phase=0;phase<4;phase++){let list=data.parts.filter(p=>data.samples[p.id+'-'+phase]?.length);const unit=lengths[phase]/list.length;for(const p of list){tasks.push({part:p.id,phase,start:cursor,end:cursor+unit});cursor+=unit}}
+let time=D,playing=false,speed=1,last=null,raf=0,selected=data.defaultPart,selectedPath=null,lastSample='',zoom=1,focused=false,fullCode='',toastTimer=0;
+const hidden=new Set(),guides=[...document.querySelectorAll('#construction path')],inks=[...document.querySelectorAll('#linework .ink')];
+const clamp=x=>Math.max(0,Math.min(1,x)),fmt=t=>String(Math.floor(t/60)).padStart(2,'0')+':'+String(Math.floor(t%60)).padStart(2,'0');
+const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+function attr(el,key,v){v=String(v);if(el.getAttribute(key)!==v)el.setAttribute(key,v)}
+function style(el,key,v){v=String(v);if(el.style[key]!==v)el.style[key]=v}
+function notify(s){$('toast').textContent=s;$('toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('visible'),2000)}
+function crop(){return map.get(selected).box}
+function updateComparison(){
+ const [x0,y0,x1,y1]=crop(),w=x1-x0,h=y1-y0;
+ document.querySelectorAll('.detail-svg').forEach(svg=>attr(svg,'viewBox',`${x0} ${y0} ${w} ${h}`));
+ document.querySelectorAll('.reference-container').forEach(box=>{const img=box.querySelector('img'),cw=box.clientWidth,ch=box.clientHeight,s=Math.min(cw/w,ch/h);if(!cw||!ch)return;Object.assign(img.style,{width:data.width*s+'px',height:data.height*s+'px',left:((cw-w*s)/2-x0*s)+'px',top:((ch-h*s)/2-y0*s)+'px'})});
+ $('crop-label').textContent=`${w} × ${h} px`;$('dialog-title').textContent=map.get(selected).name+' · 局部对比';
+}
+new ResizeObserver(updateComparison).observe(document.querySelector('.compare-pair'));
+document.querySelectorAll('.reference-image').forEach(img=>{img.addEventListener('load',updateComparison);img.addEventListener('error',()=>{$('reference-missing').style.display='block';img.style.visibility='hidden'})});
+function updateView(){const box=focused?crop():[0,0,data.width,data.height];let [x0,y0,x1,y1]=box;const w=(x1-x0)/zoom,h=(y1-y0)/zoom,cx=(x0+x1)/2,cy=(y0+y1)/2;attr($('drawing'),'viewBox',`${cx-w/2} ${cy-h/2} ${w} ${h}`);$('zoom-readout').textContent=Math.round(zoom*100)+'%';$('focus-part').setAttribute('aria-pressed',String(focused))}
+function color(hex){hex=hex.toUpperCase();$('color-hex').textContent=hex;$('color-large').style.background=hex;const rgb=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));$('color-rgb').textContent='RGB '+rgb.join(', ');document.querySelectorAll('.swatch').forEach(b=>b.classList.toggle('selected',b.dataset.color.toUpperCase()===hex))}
+function showPath(id){
+ if(id===selectedPath)return;const p=$(id);if(!p)return;selectedPath=id;
+ const group=p.closest('.paint'),part=group?.dataset.part||selected,phase=Number(group?.dataset.phase||0);
+ const order=['id','fill','stop-color','offset','transform','d'];
+ const attrs=[...p.attributes].sort((a,b)=>(order.includes(a.name)?order.indexOf(a.name):5)-(order.includes(b.name)?order.indexOf(b.name):5)).map(a=>{let value=a.value;if(a.name==='d'&&value.length>120){const commands=value.match(/[a-zA-Z][^a-zA-Z]*/g)||[value];value=commands.map(s=>s.trim()).join('\n     ')}return `  ${a.name}="${value}"`});fullCode='<'+p.localName+'\n'+attrs.join('\n')+'\n/>';
+ const fill=p.getAttribute('fill')||p.getAttribute('stop-color')||'#000000';
+ if(fill.startsWith('url(#')){const def=$(fill.slice(5,-1));if(def)fullCode=def.outerHTML.replaceAll('><','>\n  <')+'\n\n'+fullCode}
+ const limit=13000,view=fullCode.length>limit?fullCode.slice(0,limit)+'\n…':fullCode;
+ $('code').innerHTML=esc(view).replace(/(&lt;\/?)([\w-]+)/g,'$1<span class="syntax-tag">$2</span>').replace(/(\s)([\w:-]+)=(&quot;[^]*?&quot;)/g,'$1<span class="syntax-attr">$2</span>=<span class="syntax-val">$3</span>');
+ $('line-numbers').textContent=view.split('\n').map((_,i)=>i+1).join('\n');
+ $('code-note').textContent=fullCode.length>limit?'此路径较长，预览截取前 13,000 字符；复制按钮复制完整路径。':'实际绘图路径 · 复制按钮复制完整代码';
+ $('code-path').textContent=`artwork / ${part} / ${id}`;$('property-element').textContent=p.localName;$('property-id').textContent=id;$('property-part').textContent=map.get(part)?.name||part;$('property-phase').textContent=phaseLabels[phase];color(fill.startsWith('#')?fill:$(fill.slice(5,-1))?.querySelector('stop')?.getAttribute('stop-color')||'#000000');
+}
+function choosePart(id,{manual=false,sample=true}={}){
+ if(!map.has(id))return;selected=id;const p=map.get(id);
+ if(manual)$('follow').checked=false;
+ document.querySelectorAll('.layer').forEach(el=>el.classList.toggle('active',el.dataset.part===id));
+ $('part-name').textContent=p.name;$('part-index').textContent=String(data.parts.indexOf(p)+1).padStart(2,'0')+' / '+String(data.parts.length).padStart(2,'0');$('part-description').textContent=p.count.toLocaleString()+' 个元素 · 对应局部同步显示';$('status-part').textContent=p.name;
+ $('swatches').replaceChildren();for(const hex of p.colors){const b=document.createElement('button');b.className='swatch';b.style.background=hex;b.dataset.color=hex;b.title=hex;b.setAttribute('aria-label','查看颜色 '+hex);b.onclick=()=>{$('follow').checked=false;let found;for(let i=3;i>=0;i--){found=data.samples[id+'-'+i]?.find(s=>s.fill===hex);if(found)break}if(found){showPath(found.id);color(hex);return}const elements=document.querySelectorAll(`.paint[data-part="${id}"] [fill]`);for(const el of elements){const fill=el.getAttribute('fill');if(fill.toUpperCase()===hex.toUpperCase()){showPath(el.id);return}if(fill.startsWith('url(#')){const gradient=$(fill.slice(5,-1));if(gradient&&[...gradient.querySelectorAll('stop')].some(s=>s.getAttribute('stop-color')?.toUpperCase()===hex.toUpperCase())){showPath(el.id);color(hex);return}}}color(hex)};$('swatches').append(b)}
+ $('palette-count').textContent=p.colors.length+' 色';updateComparison();if(focused)updateView();
+ if(sample){const list=data.samples[id+'-2']||data.samples[id+'-0']||[];if(data.representative[id])showPath(data.representative[id].id);else if(list.length)showPath(list[Math.floor(list.length/2)].id)}
+}
+function applyVisibility(){visibility.textContent=[...hidden].map(id=>`.paint[data-part="${id}"]{display:none!important}`).join('');document.querySelectorAll('.layer').forEach(el=>{const isHidden=hidden.has(el.dataset.part);el.classList.toggle('hidden',isHidden);el.querySelector('.eye').textContent=isHidden?'○':'◉';el.querySelector('.eye').setAttribute('aria-pressed',String(!isHidden))})}
+for(const p of data.parts){const row=document.createElement('div');row.className='layer';row.dataset.part=p.id;const icon=document.createElement('span');icon.className='layer-icon';icon.textContent=p.icon;const b=document.createElement('button');b.className='layer-select';const title=document.createElement('b'),sub=document.createElement('small');title.textContent=p.name;sub.textContent=p.count.toLocaleString()+' elements';b.append(title,sub);b.onclick=()=>choosePart(p.id,{manual:true});const eye=document.createElement('button');eye.className='eye';eye.textContent='◉';eye.title='切换'+p.name+'可见性';eye.setAttribute('aria-label',eye.title);eye.setAttribute('aria-pressed','true');eye.onclick=()=>{hidden.has(p.id)?hidden.delete(p.id):hidden.add(p.id);applyVisibility()};row.append(icon,b,eye);$('layer-list').append(row)}
+$('path-count').textContent=data.paths.toLocaleString()+' 个绘图路径';$('status-paths').textContent=data.paths.toLocaleString()+' paths';
+function setTime(t){
+ time=Math.max(0,Math.min(D,Number(t)||0));let rules='',active=null;
+ for(const task of tasks){const key=task.part+'-'+task.phase,p=clamp((time-task.start)/(task.end-task.start)),bounds=data.phaseBounds[key]||[0,data.height];if(p>0)rules+=`.p-${key}{display:inline;${p<1?'clip-path:url(#clip-'+key+')':''}}`;attr($('window-'+key),'y',bounds[0]-4);attr($('window-'+key),'height',(bounds[1]-bounds[0]+8)*p);if(time>=task.start&&time<task.end)active=task}
+ if(dynamic.textContent!==rules)dynamic.textContent=rules;
+ guides.forEach((g,i)=>style(g,'strokeDashoffset',1-clamp((time/scale-i*4.8/guides.length)/1.2)));style($('construction'),'opacity',.7*(1-clamp((time/scale-8)/7)));
+ inks.forEach(g=>style(g,'opacity',clamp((time-sketchEnd-Number(g.dataset.rank)*(paintStart-sketchEnd)*.87)/(.7*scale))));style($('linework'),'opacity',1-clamp((time/scale-26)/17));
+ const stage=time<sketchEnd?'构图辅助线':time<paintStart?'轮廓与线稿':active?phaseLabels[active.phase]+' / '+map.get(active.part).name:'完成';
+ $('stage-name').textContent=stage;$('time-label').textContent=fmt(time)+' / '+fmt(D);$('timeline').value=time;$('progress-label').textContent=Math.round(time/D*100)+'%';
+ if($('follow').checked&&active){if(selected!==active.part)choosePart(active.part,{sample:false});const p=clamp((time-active.start)/(active.end-active.start)),key=active.part+'-'+active.phase,list=data.samples[key]||[],bounds=data.phaseBounds[key]||[0,data.height],scanY=bounds[0]+p*(bounds[1]-bounds[0]);const item=list.reduce((best,item)=>!best||Math.abs(item.y-scanY)<Math.abs(best.y-scanY)?item:best,null);if(item&&item.id!==selectedPath){lastSample=item.id;showPath(item.id)}}
+ if(time>=D&&playing)pause();attr($('drawing'),'data-time',time.toFixed(3));return time;
+}
+function tick(now){if(!playing)return;if(last!==null)setTime(time+(now-last)/1000*speed);last=now;if(playing)raf=requestAnimationFrame(tick)}
+function play(){if(time>=D)setTime(0);if(playing)return;playing=true;last=null;$('play').textContent='Ⅱ 暂停';$('play').setAttribute('aria-pressed','true');raf=requestAnimationFrame(tick)}
+function pause(){playing=false;cancelAnimationFrame(raf);last=null;$('play').textContent='▶ 播放绘制';$('play').setAttribute('aria-pressed','false')}
+$('play').onclick=()=>playing?pause():play();$('replay').onclick=()=>{pause();setTime(0);play()};$('finish').onclick=()=>{pause();setTime(D)};
+$('timeline').oninput=e=>{pause();setTime(e.target.value)};$('speed').onchange=e=>speed=Number(e.target.value);
+$('fit').onclick=()=>{zoom=1;focused=false;updateView()};$('zoom-in').onclick=()=>{zoom=Math.min(5,zoom*1.25);updateView()};$('zoom-out').onclick=()=>{zoom=Math.max(.5,zoom/1.25);updateView()};$('focus-part').onclick=()=>{focused=!focused;zoom=1;updateView()};
+$('show-all').onclick=()=>{hidden.clear();applyVisibility()};
+$('drawing').addEventListener('click',e=>{const p=e.target.closest('.paint path[id],.paint rect[id],.paint circle[id],.paint ellipse[id],.paint polygon[id],.paint polyline[id],.paint line[id]');if(!p)return;const g=p.closest('.paint');choosePart(g.dataset.part,{manual:true,sample:false});showPath(p.id)});
+$('follow').onchange=()=>setTime(time);
+$('copy-code').onclick=async()=>{try{if(navigator.clipboard)await navigator.clipboard.writeText(fullCode);else{const el=document.createElement('textarea');el.value=fullCode;document.body.append(el);el.select();const ok=document.execCommand('copy');el.remove();if(!ok)throw Error('Clipboard unavailable')}notify('已复制完整 SVG 路径')}catch{notify('无法自动复制，请在代码区选中后复制')}};
+$('expand-compare').onclick=()=>{$('comparison-dialog').showModal();requestAnimationFrame(updateComparison)};$('close-dialog').onclick=()=>$('comparison-dialog').close();
+window.addEventListener('resize',updateComparison);document.addEventListener('visibilitychange',()=>{last=null});
+document.addEventListener('keydown',e=>{if(['INPUT','SELECT','BUTTON','TEXTAREA'].includes(document.activeElement.tagName)||$('comparison-dialog').open)return;if(e.code==='Space'){e.preventDefault();playing?pause():play()}if(e.code==='ArrowRight'){pause();setTime(time+3)}if(e.code==='ArrowLeft'){pause();setTime(time-3)}});
+$('timeline').max=D;window.drawingPlayer={setTime,play,pause,duration:D,get time(){return time},get playing(){return playing}};window.svgStudio={selectPart:id=>choosePart(id,{manual:true}),get selectedPart(){return selected},get selectedPath(){return selectedPath},get code(){return fullCode},parts:data.parts,tasks,setFollowing:value=>{$('follow').checked=value;setTime(time)},get reference(){return data.reference}};
+const view=new URLSearchParams(location.search).get('view');if(view==='artwork')document.body.classList.add('artwork-only');setTime(D);choosePart(data.defaultPart);updateView();fitFrame();
 })();
-</script>
-</body>
-</html>
+</script></body></html>

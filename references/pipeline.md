@@ -1,180 +1,138 @@
-# Pipeline — what each stage does and why the order matters
+# Commands and per-image configuration
 
-The whole design answers one question: **how do you get from a JPEG to a few thousand flat
-paths that still look like the artist's drawing?**
+Authoring uses Pillow, NumPy and VTracer; OpenCV supports provisional contours and optional
+surface fitting. Node uses Playwright and an SVG rasterizer such as Sharp. Video uses
+FFmpeg/ffprobe and Chromium. Discover installed runtimes (`load_workspace_dependencies`
+when available), set task-local `PYTHONPATH`/`NODE_PATH` as needed, and use actual paths.
+None of these are runtime dependencies of the delivered webpage.
 
-The naive answer — "quantise the colours and trace every blob" — gets you a posterised
-image, not a drawing. It looks mushy, the ink lines turn into dotted confetti, and thin
-details like staff lines, monograms or lace simply vanish. Every stage below exists because
-the naive version failed in a specific, reproducible way.
+## 1. Original-resolution trace
 
-## 1. Lineart before colour
-
-```
-closing  = erode(dilate(grey, R), R)      # R = 2, morphological closing
-blackhat = closing - grey                 # thin dark structures light up
-ink_cand = (blackhat > line_thr) | (grey < blur(9) - dark)
+```text
+python scripts/trace.py --src reference.png --out build/fidelity.svg --preset fidelity
 ```
 
-A black-hat responds to anything *locally darker than its surroundings* and **thinner than
-~2R px**. That is exactly the definition of an ink stroke.
+Presets differ only in `layer_difference`: baseline 8, detail 4, fidelity 1. Explicit flags
+override the preset. Defaults otherwise remain color/stacked/spline, precision 8, speckle
+0, corner 60, length 3.5, 10 iterations, splice 45, path precision 2. A JSON report records
+source hash, dimensions, package version, parameters, and empty/nonempty counts.
 
-Two rejections matter:
+For an observed detail problem, retain and compare another candidate:
 
-- **Width**: each candidate component gets `width = 2·area / perimeter`. Components wider
-  than `--maxw` are large flat masses (a dark dress, a night sky) — pigment, not ink. Leaving
-  them in the ink layer paints them twice and makes them muddy.
-- **Mass**: anything over `--max-mass` px is also rejected, as a backstop for a big region
-  that happens to have a ragged perimeter.
-
-The output is one binary mask. **Look at it before you go further** (`mask_ink_a.png`): it
-should read as a clean pencil drawing of the reference. This is the single cheapest sanity
-check in the whole pipeline.
-
-## 2. Inpaint the ink away
-
-The colour layer must be *flat pigment*, but every edge in a JPEG is a gradient of
-anti-aliased pixels between ink and fill. If you feed those to k-means you spend clusters on
-muddy in-between tones and the flats come out dirty.
-
-So the ink band (dilated by 2) is diffused away — each unknown pixel takes the average of
-its known 8-neighbours, iterated until it converges (24 sweeps is plenty). The colour layer
-is then a clean, line-free painting, and the ink goes back on top later.
-
-## 3. Palette, then ownership
-
-k-means over the inpainted canvas (`--k` clusters, k-means++ seeding, 20 iterations).
-
-Two details that are easy to get wrong:
-
-- **Sample the whole canvas, not just the subject.** Background washes, moons and skies are
-  part of the drawing. If you exclude them the palette is spent entirely on the character
-  and the background turns into banding.
-- **Ink pixels inherit the nearest label afterwards**, by iteratively growing the label map
-  into the ink band. Fills must physically continue underneath the strokes, otherwise the
-  1 px of overlap between a stroke and its neighbour shows the paper through.
-
-**Validate here.** Render `cent[labels]` as a PNG and diff it against the reference. This is
-your ceiling: the source JPEG compacted to 64–76 flat colours usually lands at **2–3 mean|d|**.
-If the final vector result is far worse, the palette is not the problem and no amount of
-`--k` will help.
-
-## 4. Speck removal that respects contrast
-
-Real illustrations have both JPEG noise *and* 1–2 px intentional details: white staff lines
-on a navy skirt, a monogram, sparkles. A plain "merge every component below N px" deletes
-both, and the details are the ones you notice.
-
-The rule used here: **absorb a small patch into its dominant neighbour only when the two
-palette colours are nearly identical** (`--colthr`, default 22 in RGB distance). A noise
-speck in a flat area is absorbed; a white line on navy is kept, because its colour is nowhere
-near its neighbour's.
-
-A second pass then guarantees coverage: every remaining patch below `--minpx` is absorbed
-regardless of colour, so no region is dropped at extraction time and no holes survive.
-
-The `--minpx` / `--speck` relationship is the classic trap: if the merge limit is *below*
-`--minpx`, patches in the gap are kept in the label map but dropped when tracing, and you get
-pinprick holes all over dark areas. Keep the merge limit at or below `--minpx`.
-
-## 5. Classification: base / shadow / deep / light
-
-The layer model is what makes the result read as a painting rather than a mosaic, and it is
-also what makes the drawing-process animation meaningful.
-
-The classification must be **relative to the local base tone**, not to the local extremes.
-The first version used `rel = (lum - local_min) / (local_max - local_min)` over a 7×7 window.
-That works in the middle of a big shape and fails everywhere else: white lace surrounded by
-navy scores `rel ≈ 1` and is filed as a *highlight*, so all the white fabric of the dress
-ended up in the highlight stage and the mid-video state was a colander of white holes.
-
-The fix is a **wide-window median** (21 px) as the estimate of "the colour of this area":
-
-```
-ratio = lum(patch) / median(local_luminance, 21px)
-ratio < 0.74  -> deep      最深的暗部
-ratio < 0.90  -> shadow    一级阴影
-ratio > 1.15  -> light     高光
-otherwise     -> base      固有色
+```text
+python scripts/trace.py --src reference.png --out build/baseline.svg --preset baseline
+python scripts/trace.py --src reference.png --out build/detail.svg --preset detail
 ```
 
-A big white apron's own interior dominates its window median, so it scores ≈ 1.0 → base.
-White lace on a navy dress still scores high → light. That is the behaviour you want.
+Do not downsample the source or re-encode it as JPEG for convenience. Preview crops can
+be smaller; the selected geometry should retain the original dimensions unless the user
+chooses a file-size tradeoff.
 
-Thin dark patches (`width ≤ 3.2`, dark relative to local) are additionally filed as `line`,
-a hairline structure layer that sits just under the ink.
+## 2. Render and compare
 
-## 6. Tracing: boundary walk, RDP, smoothing — and **polylines**
-
-Each region mask is walked on pixel corners. Because every foreground/background side becomes
-a directed unit edge with the interior on its left, the edges always form closed loops and
-holes come out automatically with opposite winding — draw them with `fill-rule="nonzero"` and
-you need no boolean operations at all.
-
-Then: RDP simplify → one or two passes of a 3×3 averaging kernel → emit.
-
-**Emit straight segments, not a Catmull-Rom spline.** This is the least obvious and most
-important decision in the pipeline. A cardinal spline through the boundary of a 2 px wide
-stroke overshoots; the path self-intersects; and under `nonzero` fill the windings cancel,
-punching holes in the middle of the stroke. The symptom is unmistakable — every thin line
-renders as a **dotted / dashed chain** while the underlying mask is perfectly continuous.
-
-A smoothed polyline (RDP at ε ≈ 0.25–0.45 plus 1–2 kernel passes) cannot leave the mask
-hull, and because `L` commands are three times shorter than `C` commands, it is *also*
-smaller: swapping splines for polylines took the trace JSON from 16.7 MB to 5.0 MB with no
-visible quality loss.
-
-Simplification tolerance scales with patch size — small patches are traced tightly
-(ε ≈ 0.25), large washes loosely (ε ≈ 0.45) — because a 0.4 px error is a big deal on a 2 px
-staff line and irrelevant on a 300 px skirt.
-
-## 7. Sealing the hairline cracks
-
-Each region is simplified **independently**, so two neighbours that share an edge no longer
-agree on it exactly. Rendered side by side they leave sub-pixel white cracks — the pale
-spiderweb you see over a dark area at high zoom.
-
-Two ways to close them:
-
-- dilate every mask by 1 px before tracing (the region then overlaps its neighbours by 2 px);
-- or trace the exact mask and paint each path with a **same-colour stroke of ~1.2 px**.
-
-Prefer the stroke. Dilating by 1 px means a later-drawn neighbour eats 1 px from each side of
-an earlier-drawn thin detail, which can erase a 2 px line entirely; the stroke only takes
-0.6 px and the ink layer, drawn last, stays pixel-exact. Skip the stroke on patches thinner
-than ~3.5 px so hairlines keep their true weight.
-
-## 8. Z-order
-
-Within the character: `base → shadow → deep → light → line → ink`, and **inside each kind,
-largest area first**. Big flat shapes go down early; small details land on top and are not
-covered by their own neighbours' strokes.
-
-Background regions are drawn before all of it, sorted by area descending. Effects (a rainbow
-beam, a prism flare) go last.
-
-Note this ordering is about *occlusion*. The animation timeline is independent — it is stored
-as `data-t` on each element and sorted top-to-bottom, so an artist-like "working down the
-sheet" cadence does not force a bad z-order.
-
-## 9. Hand layers
-
-A traced palette will never draw convincing eyes: the iris, the catchlight and the lash are
-30 px of deliberate design, and k-means sees them as four arbitrary blobs. That is what the
-`FACE_SVG` overlay is for — opaque shapes on top of the ink, measured from zoomed crops.
-
-Same for `SKETCH_SVG`: the construction lines are *not* in the reference, they exist so the
-first seconds of the animation look like a person blocking in a pose.
-
-## 10. Timeline
-
-`emit.py` assigns every element a reveal time from its stage window and its rank when sorted
-by `(y, x)`:
-
-```
-t0 = stage_start + rank^0.88 * (stage_span - reveal)
+```javascript
+const sharp = require('sharp');
+await sharp('build/fidelity.svg', {limitInputPixels:false}).png().toFile('build/fidelity.png');
 ```
 
-Both players (the demo page's JS and the Remotion composition) only read `data-t` / `data-d`
-and set `opacity`. The timeline lives in the artwork, so adding a player is ~40 lines, and
-seeking is exact.
+```text
+python scripts/render_check.py --ref reference.png --render build/fidelity.png --out build/check --crop face:120,80,280,240
+```
+
+Measure crop coordinates for the current image. The helper emits aligned comparisons,
+an amplified difference image, and metrics. Dimensions must match. Transparent inputs use
+an explicit common matte; inspect alpha independently when transparency matters.
+
+## 3. Measure parts and guides
+
+The example below is a schema illustration for a hypothetical 400 × 300 image, not a
+reusable composition. Author a new `drawing.json` for the actual source:
+
+```json
+{
+  "title": "Reference illustration",
+  "paper": "#f5f7fc",
+  "initialPart": "subject",
+  "defaultPart": "background",
+  "parts": [
+    {"id":"background","name":"背景","bbox":[0,0,400,300],"icon":"◉"},
+    {"id":"subject","name":"主体","bbox":[90,35,310,295],"icon":"◇"}
+  ],
+  "rules": [
+    {"part":"background","minAreaRatio":0.3},
+    {"part":"subject","bbox":[90,35,310,295]}
+  ],
+  "sketch": [
+    {"id":"head-envelope","d":"M200 45 C150 45 150 125 200 140 C250 125 250 45 200 45Z"},
+    {"id":"face-axis","d":"M200 45 L200 140"}
+  ]
+}
+```
+
+`bbox` always means `[x0,y0,x1,y1]` in original coordinates. Rules use the shape's
+approximate bounding-box center; the first matching rule wins. With no explicit rules,
+the smallest containing part wins. `defaultPart` handles unmatched geometry. A rule can
+combine `bbox`, `minArea`, `maxArea`, `minAreaRatio`, `maxAreaRatio` and color conditions:
+
+```json
+{"part":"ribbon","bbox":[250,50,320,200],"maxArea":8000,
+ "color":[{"coefficients":[1,-1,0],"min":12}]}
+```
+
+That condition means `R-G >= 12`; each listed condition must match. This supports measured
+hue distinctions without baking a character's colors into the helper. Limit eye-specific
+rules by area so a large blue hair shape centered near an eye does not become a face layer.
+
+Optional part `phase` or selected element `data-phase` overrides automatic staging:
+0 base, 1 shadow, 2 detail, 3 highlight. `data-part` explicitly assigns a native element or
+compound group. `data-bbox` supplies measured bounds for a compound group or unsupported
+transform; bounds affect staging only. Phase/part guesses do not recover original artist
+layers. Inspect intermediate frames, especially large white cloth and disconnected shapes.
+
+## 4. Optional measured refinement
+
+When comparison shows gradient banding or lost soft color, use the native models described
+in [refinement.md](refinement.md). Add `refinements` to the same image-specific JSON:
+
+```text
+python scripts/refine_gradients.py --svg build/fidelity.svg --ref reference.png --render build/fidelity.png --config drawing.json --out build/refined.svg
+```
+
+Render and compare the refined candidate before choosing it. This operation is optional;
+the emitter can use `fidelity.svg` directly. Keep baseline and refined files separate.
+
+## 5. Emit static artwork and the current studio
+
+```text
+python scripts/emit.py --svg build/refined.svg --ref reference.png --config drawing.json --out deliverables --name illustration --duration 90 --lineart --comparison
+```
+
+Use `--comparison` only when the user requests a reference comparison. It copies the
+reference to `illustration-reference.<ext>` and adds local `<img>` panels **outside** the
+artwork. Without the flag, there are no raster image elements in the demo; the inspector
+shows a native SVG local preview. SVG and standalone artwork HTML never embed a reference.
+
+Outputs: `illustration.svg`, `illustration.html`, `illustration-demo.html`, a report, and
+the reference copy only when enabled. The static files exclude guides and contour overlays.
+The demo opens directly from disk. Its drawing is fully inline and does not depend on
+the MP4, a server, online fonts, or authoring packages.
+
+The emitter accepts direct traced paths plus the native gradient/clipping/filter groups
+created by the refinement step. It preserves their render order and inherited attributes.
+It is not a general importer for arbitrary SVG applications or external CSS documents.
+
+## 6. Check and deliver
+
+```text
+node scripts/verify_studio.cjs --html deliverables/illustration-demo.html --out build/ui-check --chrome "PATH_TO_CHROME"
+```
+
+The browser check exercises real pointer controls, crop selection, colors/code, full copy,
+visibility, all phase transitions, zoom/fit, seeking, the comparison dialog and mobile
+layout. Review the saved screenshots. Render the emitted static SVG and compare it with
+the selected candidate too: grouping is allowed, unintended pixel changes are not.
+
+Video commands and validation are in [video.md](video.md). For a requested ZIP, include the
+demo, static SVG/HTML, completed MP4 and local reference only when comparison is enabled.
+Keep build caches and authoring dependencies out of the ZIP. Extract into a fresh folder
+and open the demo to catch missing relative assets.

@@ -1,272 +1,125 @@
-# -*- coding: utf-8 -*-
-"""Build the layered SVG artwork + the self-contained HTML deliverables.
+"""Preserve selected native SVG geometry and build the linked SVG Studio player."""
+import argparse,collections,copy,hashlib,html,json,re,shutil
+from pathlib import Path
+import xml.etree.ElementTree as ET
+import numpy as np
+from PIL import Image,ImageFilter
+from svg_common import NS,GEOMETRY,local,slug,serialize,rgb,bounds,info,assigned_part,read_config,audit_native
 
-Turns trace_<tag>.json into:
-  * <out>/art_<tag>.svg           the raw layered artwork fragment
-  * <html-out>/<name>.html        static page, one complete self-contained file
-  * <html-out>/<name>-demo.html   drawing-process player (same SVG + timeline JS)
-  * <out>/<Name>Art.ts            the same SVG as a TS module for the Remotion video
-
-Usage:
-  python emit.py --trace build/trace_a.json --out build --html-out . \
-      --name my-art --title "MY ART" --subtitle "纯 SVG 重绘 · 绘制流程回放" \
-      --duration 88 [--overlay scripts/overlay_example.py] \
-      [--ref-image "ref.jpg"] [--plate "#f9f5f8"] [--stroke 1.2]
-"""
-import argparse, importlib.util, json, os, re, sys
-
-ap = argparse.ArgumentParser()
-ap.add_argument("--trace", required=True)
-ap.add_argument("--out", required=True, help="where art_<tag>.svg + the TS module go")
-ap.add_argument("--html-out", default=".", help="where the two .html deliverables go")
-ap.add_argument("--name", default="artwork", help="kebab-case deliverable base name")
-ap.add_argument("--title", default="SVG REDRAW")
-ap.add_argument("--subtitle", default="纯 SVG 重绘 · 绘制流程回放")
-ap.add_argument("--duration", type=float, default=88.0, help="seconds of the drawing timeline")
-ap.add_argument("--overlay", default="", help="python file exposing SKETCH_SVG / FACE_SVG")
-ap.add_argument("--ref-image", default="", help="file name (next to the html) used by 对比原图")
-ap.add_argument("--plate", default="#f9f5f8", help="paper colour behind the traced fills")
-ap.add_argument("--stroke", default="1.2", help="same-colour stroke that seals hairline seams")
-ap.add_argument("--tag", default="a")
-args = ap.parse_args()
-
-OUT = args.out
-HTML_OUT = args.html_out
-os.makedirs(OUT, exist_ok=True)
-os.makedirs(HTML_OUT, exist_ok=True)
-TAG = args.tag
-DUR = args.duration
-SW = args.stroke
-NAME = args.name
-TITLE = args.title
-SUB = args.subtitle
-REF_IMAGE = args.ref_image
-
-overlay = None
-if args.overlay:
-    spec = importlib.util.spec_from_file_location("overlay", args.overlay)
-    overlay = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(overlay)
-OVERLAY = overlay is not None and hasattr(overlay, "SKETCH_SVG")
-FACE_ON = overlay is not None and hasattr(overlay, "FACE_SVG")
-
-t = json.load(open(args.trace, encoding="utf-8"))
-W, H = t["w"], t["h"]
-regions = t["regions"]
-strokes = t.get("strokes", [])
-print("fill regions", len(regions), "ink strokes", len(strokes))
-
-PLATE = args.plate
-KIND_ORDER = {"base": 0, "shadow": 1, "deep": 2, "light": 3, "line": 4}
-KIND_CN = {"base": "固有色", "shadow": "一级阴影", "deep": "二级暗部",
-           "light": "高光", "line": "细线"}
-
-
-# ------------------------------------------------------------------ zones
-def is_fx(r):
-    x0, y0, x1, y1 = r["bbox"]
-    return x0 >= 545 and y0 >= 205 and y1 <= 345
-
-
-bg_regions, fx_regions, char_regions, char_strokes, fx_strokes = [], [], [], [], []
-for r in regions:
-    if is_fx(r):
-        fx_regions.append(r)
-    elif r.get("zone") == "bg":
-        bg_regions.append(r)
-    else:
-        char_regions.append(r)
-for s in strokes:
-    (fx_strokes if is_fx(s) else char_strokes).append(s)
-
-bg_regions.sort(key=lambda r: -r["area"])
-char_regions.sort(key=lambda r: (KIND_ORDER.get(r["kind"], 9), -r["area"]))
-fx_regions.sort(key=lambda r: -r["area"])
-char_strokes.sort(key=lambda r: -r["area"])
-fx_strokes.sort(key=lambda r: -r["area"])
-
-# ------------------------------------------------------------------ timing
-STAGES = [
-    ("sketch", "构图 · 起草", 0.075),
-    ("bg", "背景 · 铺底", 0.085),
-    ("base", "固有色 · 铺色", 0.200),
-    ("shadow", "一级阴影 · 体积", 0.085),
-    ("deep", "二级暗部 · 压深", 0.065),
-    ("light", "高光 · 提亮", 0.105),
-    ("line", "细线 · 收形", 0.075),
-    ("ink", "勾线 · 墨线", 0.200),
-    ("face", "面部 · 刻画", 0.070),
-    ("fx", "光效 · 彩虹棱镜", 0.060),
-]
-tot = sum(s[2] for s in STAGES)
-T, acc = {}, 0.0
-for k, lab, w in STAGES:
-    T[k] = (acc / tot * DUR, (acc + w) / tot * DUR)
-    acc += w
-REVEAL = 0.32
-
-
-def times_for(items):
-    order = sorted(range(len(items)), key=lambda i: (items[i]["cy"], items[i]["cx"]))
-    n = max(1, len(items))
-    out = [0.0] * len(items)
-    for rank, i in enumerate(order):
-        out[i] = (rank / n) ** 0.88
-    return out
-
-
-def layer(gid, label, items, stage, cls, stroke=True):
-    a, b = T[stage]
-    span = max(0.001, b - a)
-    fr = times_for(items)
-    rows = ['<g id="layer-%s" class="art-layer" data-layer="%s" data-label="%s">'
-            % (gid, stage, label)]
-    for r, f in zip(items, fr):
-        t0 = a + f * (span - REVEAL)
-        # hairline seams between neighbours are closed with a same colour stroke; razor
-        # thin patches are left unstroked so they keep their exact width
-        st = (' stroke="%s" stroke-width="%s"' % (r["hex"], SW)
-              if stroke and r.get("w", 9) > 3.5 else "")
-        rows.append('<path class="rg %s" data-t="%.2f" data-d="%.2f" fill="%s"%s d="%s"/>'
-                    % (cls, t0, REVEAL, r["hex"], st, r["d"]))
-    rows.append("</g>")
-    return "\n".join(rows)
-
-
-def timed(fragment, stage, steps=None):
-    """Give a hand authored fragment the same data-t/data-d reveal contract as the traced paths."""
-    a, b = T[stage]
-    span = max(0.001, b - a)
-    head, sep, rest = fragment.partition(">")
-    if not sep:
-        return fragment
-    n = steps or 14
-    idx = [0]
-
-    def repl(m):
-        i = idx[0]; idx[0] += 1
-        t0 = a + (min(i, n) / float(n)) * (span - REVEAL)
-        tag = m.group(0)
-        attr = ' data-t="%.2f" data-d="%.2f"' % (t0, REVEAL)
-        # self closing tags must stay self closing, otherwise the following siblings
-        # would be parsed as their children and silently disappear
-        if tag.endswith("/>"):
-            return tag[:-2] + attr + "/>"
-        return tag[:-1] + attr + ">"
-
-    inner = re.sub(r'<(path|ellipse|circle|rect|line|polygon|polyline|g)\b[^>]*?>', repl, rest)
-    return head + sep + inner
-
-
-body = []
-body.append('<g id="layer-paper" class="art-layer" data-layer="paper" data-label="画纸">'
-            '<rect id="paper-plate" width="%d" height="%d" fill="%s"/>'
-            '<rect id="paper-wash" width="%d" height="%d" fill="url(#grad-paper)"/></g>'
-            % (W, H, PLATE, W, H))
-if OVERLAY:
-    body.append(timed(overlay.SKETCH_SVG, "sketch", 22))
-body.append(layer("bg", "背景 · 装饰", bg_regions, "bg", "z-bg"))
-for kind in ("base", "shadow", "deep", "light", "line"):
-    items = [r for r in char_regions if r["kind"] == kind]
-    if items:
-        body.append(layer(kind, KIND_CN[kind], items, kind, "z-" + kind))
-body.append(layer("ink", "勾线 · 墨线", char_strokes, "ink", "z-ink", stroke=False))
-if FACE_ON:
-    body.append(timed(overlay.FACE_SVG, "face", 12))
-body.append(layer("fx", "光效", fx_regions + fx_strokes, "fx", "z-fx"))
-body.append('<rect id="paper-grain" width="%d" height="%d" fill="#ffffff" '
-            'opacity="0.03" filter="url(#paper-grain-f)"/>' % (W, H))
-ARTWORK = "\n".join(x for x in body if x)
-
-STAGE_JSON = json.dumps([{"key": k, "label": lab, "from": round(T[k][0], 3),
-                          "to": round(T[k][1], 3)} for k, lab, w in STAGES],
-                        ensure_ascii=False)
-
-DEFS = '''<defs>
-    <linearGradient id="grad-paper" x1="0" y1="0" x2="0.35" y2="1">
-      <stop offset="0" stop-color="#fcfafc"/><stop offset="0.55" stop-color="#f9f5f9"/>
-      <stop offset="1" stop-color="#f4eff6"/>
-    </linearGradient>
-    <radialGradient id="grad-iris" cx="0.44" cy="0.28" r="0.82">
-      <stop offset="0" stop-color="#8f8ac0"/><stop offset="0.4" stop-color="#7974aa"/>
-      <stop offset="0.76" stop-color="#615c94"/><stop offset="1" stop-color="#4b4677"/>
-    </radialGradient>
-    <linearGradient id="grad-iris-lower" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="1" stop-color="#d8d5ee" stop-opacity="0.72"/>
-    </linearGradient>
-    <radialGradient id="grad-blush" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#f0a9ad" stop-opacity="0.5"/>
-      <stop offset="0.6" stop-color="#f0a9ad" stop-opacity="0.24"/>
-      <stop offset="1" stop-color="#f0a9ad" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="paper-grain-f" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" result="n"/>
-      <feColorMatrix in="n" type="saturate" values="0"/>
-      <feComponentTransfer><feFuncA type="linear" slope="0.06"/></feComponentTransfer>
-    </filter>
-  </defs>'''
-
-SVG = ('<svg id="redraw-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" '
-       'preserveAspectRatio="xMidYMid meet" role="img" '
-       'aria-labelledby="art-title art-desc">\n'
-       '  <title id="art-title">%s（纯 SVG 重绘）</title>\n'
-       '  <desc id="art-desc">以原生 SVG 路径分层绘制的插画：画纸、构图辅助线、背景、'
-       '固有色、一级阴影、二级暗部、高光、细线、墨线勾线、面部刻画与光效。</desc>\n'
-       '  %s\n%s\n</svg>' % (W, H, TITLE, DEFS, ARTWORK))
-
-STATIC = '''<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__TITLE__ · 纯 SVG 重绘</title>
-<style>
-  *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{background:radial-gradient(120% 80% at 50% -10%,#fdfbff 0%,#f0ecf7 42%,#ddd6ea 100%);
-       display:flex;align-items:center;justify-content:center;padding:24px 14px;
-       font-family:"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif}
-  .artwork{margin:0;width:min(92vmin,780px);max-height:100%;aspect-ratio:__W__/__H__;
-           filter:drop-shadow(0 26px 60px rgba(64,56,98,.26))}
-  .artwork svg{display:block;width:100%;height:100%;border-radius:6px}
-  #layer-sketch{display:none}
-</style>
-</head>
-<body>
-<figure class="artwork">
-__SVG__
-</figure>
-</body>
-</html>
-'''
-
-DEMO = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "demo_template.html"), encoding="utf-8").read()
-
-HTML_NAME = os.path.join(HTML_OUT, NAME + ".html")
-DEMO_NAME = os.path.join(HTML_OUT, NAME + "-demo.html")
-TS_NAME = os.path.join(OUT, NAME.replace("-", "_") + "_art.ts")
-TS_EXPORT = re.sub(r"[^A-Za-z0-9]+", "_", NAME).strip("_").upper()
-
-open(os.path.join(OUT, "art_%s.svg" % TAG), "w", encoding="utf-8").write(SVG)
-open(HTML_NAME, "w", encoding="utf-8").write(
-    STATIC.replace("__SVG__", SVG).replace("__TITLE__", TITLE)
-          .replace("__W__", str(W)).replace("__H__", str(H)))
-open(DEMO_NAME, "w", encoding="utf-8").write(
-    DEMO.replace("__SVG__", SVG)
-        .replace("__DUR__", "%.1f" % DUR)
-        .replace("__STAGES__", STAGE_JSON)
-        .replace("__TITLE__", TITLE)
-        .replace("__SUB__", SUB)
-        .replace("__REF__", REF_IMAGE.replace(" ", "%20") if REF_IMAGE else ""))
-open(TS_NAME, "w", encoding="utf-8").write(
-    "// AUTO-GENERATED by svg-redraw scripts/emit.py - do not edit by hand.\n"
-    "export const %s_SVG = " % TS_EXPORT + json.dumps(SVG, ensure_ascii=False) + ";\n"
-    "export const %s_DURATION = %r;\n" % (TS_EXPORT, DUR) +
-    "export const %s_W = %d;\nexport const %s_H = %d;\n" % (TS_EXPORT, W, TS_EXPORT, H) +
-    "export const %s_STAGES = %s as {key: string; label: string; from: number; to: number}[];\n"
-    % (TS_EXPORT, json.dumps(json.loads(STAGE_JSON), ensure_ascii=False)))
-for f in (HTML_NAME, DEMO_NAME, os.path.join(OUT, "art_%s.svg" % TAG), TS_NAME):
-    print("%9.1f KB  %s" % (os.path.getsize(f) / 1024.0, f))
-
+def main():
+    ap=argparse.ArgumentParser(description=__doc__)
+    for key in ('svg','ref','config','out'):ap.add_argument('--'+key,required=True)
+    ap.add_argument('--name',default='illustration');ap.add_argument('--duration',type=float,default=90)
+    ap.add_argument('--lineart',action='store_true');ap.add_argument('--comparison',action='store_true',help='Include a local reference only when reference comparison is requested')
+    a=ap.parse_args()
+    if not np.isfinite(a.duration) or a.duration<=0:raise ValueError('Positive duration required')
+    out=Path(a.out).resolve();out.mkdir(parents=True,exist_ok=True);name=slug(a.name)
+    source=Path(a.svg).resolve();reference=Path(a.ref).resolve();im=Image.open(reference).convert('RGB');w,h=im.size
+    if source in {out/(name+'.svg'),out/(name+'.html'),out/(name+'-demo.html')}:raise ValueError('Keep selected source separate from deliverables')
+    root=ET.parse(source).getroot();existing=audit_native(root)
+    if [float(v) for v in root.get('viewBox','').split()]!=[0,0,w,h]:raise ValueError('SVG viewBox must match original reference dimensions')
+    cfg=read_config(a.config,w,h);parts=copy.deepcopy(cfg['parts']);pmap={p['id']:p for p in parts}
+    title=str(cfg.get('title','参考图重建'));safe_title=html.escape(title);paper=str(cfg.get('paper','#f5f7fc'))
+    soft=np.asarray(im.convert('L').filter(ImageFilter.GaussianBlur(max(w,h)/256)))
+    defs={n.get('id'):n for n in root.iter() if n.get('id')}
+    stats=collections.Counter();palettes=collections.defaultdict(collections.Counter);samples=collections.defaultdict(list)
+    phase_bounds={};representatives={};groups=0;sequence=0;path_count=0;skipped=0
+    reserved={'drawing','artwork','construction','linework','art-title'}
+    if reserved&existing:raise ValueError('Selected SVG uses reserved studio IDs: '+', '.join(sorted(reserved&existing)))
+    def new_id(prefix):
+        nonlocal sequence
+        while True:
+            sequence+=1;nid=f'{prefix}-{sequence}'
+            if nid not in existing:existing.add(nid);return nid
+    def phase_for(n,it):
+        if 'data-phase' in n.attrib:
+            v=int(n.get('data-phase'))
+            if v not in range(4):raise ValueError('data-phase must be 0..3')
+            return v
+        area=it['area'];c=it['rgb'];near=float(soft[min(h-1,max(0,int(it['y']))),min(w-1,max(0,int(it['x'])))])
+        lum=float(c@[.299,.587,.114]) if c is not None else near
+        if area/(w*h)>cfg.get('baseAreaRatio',.000167):return 0
+        if lum<near-7 and area/(w*h)>.0000083:return 1
+        if lum>near+15 and lum>180:return 3
+        return 2
+    def paint_colors(n):
+        fill=n.get('fill','');c=rgb(fill)
+        if c is not None:return ['#'+''.join(f'{int(v):02X}' for v in c)]
+        m=re.fullmatch(r'url\(#([^)]+)\)',fill)
+        if m and m[1] in defs:return [s.get('stop-color').upper() for s in defs[m[1]].iter() if rgb(s.get('stop-color','')) is not None]
+        return []
+    def register(n,part,phase,unit):
+        nonlocal path_count
+        for el in n.iter():
+            if local(el) not in GEOMETRY:continue
+            if not el.get('id'):el.set('id',new_id(part+'-'+local(el)))
+            if local(el)=='path':path_count+=1
+            stats[part]+=1;it=info(el,w,h) if bounds(el) is not None else unit
+            if local(n)=='g' and n.get('transform'):it=unit
+            colors=paint_colors(el)
+            for c in colors:palettes[part][c]+=min(max(it['area'],1),w*h*.0048)/max(1,len(colors))
+            samples[f'{part}-{phase}'].append({'id':el.get('id'),'y':round(it['y'],3),'fill':colors[len(colors)//2] if colors else '#000000'})
+            if it['area']>representatives.get(part,{}).get('area',-1):representatives[part]={'id':el.get('id'),'area':it['area']}
+    def wrap_children(parent):
+        nonlocal groups,skipped
+        result=[];active=None;run=None
+        for child in list(parent):
+            tag=local(child)
+            if tag in ('defs','title','desc'):result.append(child);active=None;continue
+            if tag=='path' and not child.get('d','').strip():skipped+=1;continue
+            if tag=='g' and not child.get('data-part'):
+                wrap_children(child);result.append(child);active=None;continue
+            it=info(child,w,h);part=assigned_part(child,it,cfg,w,h)
+            if part not in pmap:raise ValueError('Unknown data-part: '+part)
+            phase=int(pmap[part].get('phase',phase_for(child,it)))
+            if phase not in range(4):raise ValueError('Part phase must be 0..3')
+            key=f'{part}-{phase}'
+            if key!=active:
+                groups+=1;run=ET.Element('g',{'id':new_id('layer-'+key),'class':'paint p-'+key,'data-part':part,'data-phase':str(phase)});result.append(run);active=key
+            run.append(child);register(child,part,phase,it)
+            prev=phase_bounds.get(key,[h,0]);phase_bounds[key]=[max(-4,min(prev[0],it['bbox'][1])),min(h+4,max(prev[1],it['bbox'][3]))]
+        parent[:]=result
+    wrap_children(root)
+    for key,vals in samples.items():
+        vals.sort(key=lambda s:s['y']);indices=np.linspace(0,len(vals)-1,min(60,len(vals)),dtype=int)
+        samples[key]=[vals[i] for i in sorted(set(indices.tolist()))]
+    for p in parts:p.update(box=p['bbox'],count=stats[p['id']],colors=[c for c,_ in palettes[p['id']].most_common(14)])
+    inherited={k:v for k,v in root.attrib.items() if k not in ('id','width','height','viewBox','preserveAspectRatio','role','aria-label','aria-labelledby')}
+    extra_attrs=' '.join(f'{k}="{html.escape(v,quote=True)}"' for k,v in inherited.items())
+    head=f'<svg xmlns="{NS}" id="drawing" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="art-title" {extra_attrs}><title id="art-title">{safe_title}</title>'
+    definition=''.join(serialize(n) for n in root if local(n)=='defs')
+    body=''.join(serialize(n) for n in root if local(n) not in ('defs','title','desc'))
+    painting='<g id="artwork">'+body+'</g>';finished=head+definition+painting+'</svg>'
+    audit_native(ET.fromstring(finished));(out/(name+'.svg')).write_text(finished,'utf-8')
+    css='html,body{margin:0;background:#eef2f6;min-height:100%}body{display:grid;place-items:center;min-height:100vh}svg{display:block;width:100%;height:auto;max-height:100vh}'
+    (out/(name+'.html')).write_text(f'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{safe_title}</title><style>{css}</style></head><body>{finished}</body></html>','utf-8')
+    guides=''.join(serialize(ET.Element('path',{'id':'guide-'+slug(g.get('id',i)),'d':g['d'],'pathLength':'1'})) for i,g in enumerate(cfg.get('sketch',[])))
+    marks=[]
+    if a.lineart:
+        import cv2
+        gray=cv2.cvtColor(np.asarray(im),cv2.COLOR_RGB2GRAY);edge=cv2.Canny(cv2.GaussianBlur(gray,(3,3),.7),45,110)
+        contours,_=cv2.findContours(edge,cv2.RETR_LIST,cv2.CHAIN_APPROX_SIMPLE)
+        for c in contours:
+            if cv2.arcLength(c,False)<max(8,35*w/3840):continue
+            q=cv2.approxPolyDP(c,.6,False).reshape(-1,2)
+            if len(q)>2:marks.append((float(q[:,1].mean()),'<path d="M'+' L'.join(f'{x} {y}' for x,y in q)+'"/>'))
+    marks.sort();batches=[[] for _ in range(36)]
+    for i,(_,s) in enumerate(marks):batches[min(35,i*36//len(marks))].append(s)
+    sketch=f'<g id="construction" class="editor-only" fill="none" stroke="#53627d" stroke-width="{max(.5,w/1536)}" stroke-linecap="round">{guides}</g>'
+    ink=f'<g id="linework" class="editor-only" fill="none" stroke="#283758" stroke-width="{max(.35,w/2743)}" stroke-linecap="round">'+''.join(f'<g class="ink" data-rank="{i/36:.5f}">{"".join(batch)}</g>' for i,batch in enumerate(batches))+'</g>'
+    clips=''.join(f'<clipPath id="clip-{key}" clipPathUnits="userSpaceOnUse"><rect id="window-{key}" x="-4" y="-4" width="{w+8}" height="{h+8}"/></clipPath>' for key in samples)
+    art=head+definition+'<defs>'+clips+'</defs>'+f'<rect id="paper" width="{w}" height="{h}" fill="{html.escape(paper,quote=True)}"/>'+painting+sketch+ink+'</svg>'
+    reference_name=None
+    if a.comparison:
+        reference_name=name+'-reference'+reference.suffix.lower();target=out/reference_name
+        if target.resolve()!=reference:shutil.copyfile(reference,target)
+    initial=cfg.get('initialPart',parts[0]['id'])
+    if initial not in pmap:raise ValueError('Unknown initialPart')
+    data={'width':w,'height':h,'paths':path_count,'elements':sum(stats.values()),'parts':parts,'samples':dict(samples),'phaseBounds':phase_bounds,'representative':representatives,'duration':a.duration,'reference':reference_name,'defaultPart':initial,'hasGuides':bool(guides),'hasLinework':bool(marks)}
+    def ref_panel(label):return '<div class="compare-box"><div class="compare-label">原图<span>REFERENCE</span></div><div class="compare-image reference-container"><img class="reference-image" src="'+html.escape(reference_name,quote=True)+'" alt="'+label+'"></div></div>' if reference_name else ''
+    values={'TITLE':safe_title,'NAME':name,'WIDTH':str(w),'HEIGHT':str(h),'ART':art,'DATA':json.dumps(data,ensure_ascii=False,separators=(',',':')).replace('<','\\u003c'),'REF_INLINE':ref_panel('本地参考图对应局部'),'REF_MODAL':ref_panel('本地参考图放大局部'),'COMPARE_CLASS':'' if reference_name else 'solo','COMPARE_TITLE':'局部同步对比' if reference_name else '当前部位预览','REFERENCE_NOTE':'本地原图仅用于对比' if reference_name else '纯 SVG · 离线工作台'}
+    template=Path(__file__).with_name('demo_template.html').read_text('utf-8');template=re.sub(r'@@([A-Z_]+)@@',lambda m:values[m[1]],template)
+    (out/(name+'-demo.html')).write_text(template,'utf-8')
+    report={'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'reference_sha256':hashlib.sha256(reference.read_bytes()).hexdigest(),'dimensions':[w,h],'artwork_paths':path_count,'artwork_elements':sum(stats.values()),'empty_paths_skipped':skipped,'groups':groups,'guide_paths':len(cfg.get('sketch',[])),'lineart_paths':len(marks),'duration':a.duration,'comparison_reference':reference_name,'outputs':[name+'.svg',name+'.html',name+'-demo.html']}
+    (out/(name+'-report.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),'utf-8');print(json.dumps(report,ensure_ascii=False))
+if __name__=='__main__':main()

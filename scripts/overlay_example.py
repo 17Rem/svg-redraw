@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Legacy resource: not used by the active svg-redraw workflow; follow SKILL.md.
 """TEMPLATE for the hand-authored layers. Copy next to your build dir, rename to
 `overlay.py`, and replace every coordinate with measurements taken from
 `analyze.py --zoom` crops of YOUR reference.

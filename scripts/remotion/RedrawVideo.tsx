@@ -1,3 +1,4 @@
+// Legacy resource: not used by the active svg-redraw workflow; follow SKILL.md.
 /**
  * Generic "redraw playback" video for a traced SVG.
  *

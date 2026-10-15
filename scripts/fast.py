@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Legacy resource: not used by the active svg-redraw workflow; follow SKILL.md.
 """Fast local helpers: connected components with local windows and local contour tracing."""
 import numpy as np
 import geo

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Legacy resource: not used by the active svg-redraw workflow; follow SKILL.md.
 """Shared geometry helpers for the illustration tracing pipeline."""
 import math
 import numpy as np
